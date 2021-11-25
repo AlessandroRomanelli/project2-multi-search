@@ -2,6 +2,7 @@ import os
 import sys
 from ast import parse, NodeVisitor, ClassDef, Assign, FunctionDef, get_docstring
 import pandas as pd
+import re
 
 
 def check_if_py(filePath):
@@ -28,7 +29,7 @@ def get_comment(node):
     comment = get_docstring(node, clean=True)
     if not comment:
         return None
-    return get_docstring(node, clean=True).replace("\n", "\\n")
+    return re.sub("\W+", " ", get_docstring(node, clean=True))
 
 
 class Visitor(NodeVisitor):
