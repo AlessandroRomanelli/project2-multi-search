@@ -64,7 +64,7 @@ def main():
     sims = index[tfidf[query_bow]]
     sims = sorted(enumerate(sims), key=lambda x: x[1], reverse=True)
     print("\n\nSimilarity results for TF-IDF:")
-    for i, s in sims:
+    for i, s in sims[:5]:
         print(f"Similarity: {s}")
         print(data.loc[i][["name", "file", "type", "line"]].to_string())
 
@@ -82,6 +82,7 @@ def main():
     for i, s in sims[:5]:
         print(f"Similarity: {s}")
         print(data.loc[i][["name", "file", "type", "line"]].to_string())
+
 
 if __name__ == "__main__":
     main()
