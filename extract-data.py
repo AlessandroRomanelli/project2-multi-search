@@ -48,7 +48,7 @@ class Visitor(NodeVisitor):
             if is_blacklist(fn):
                 continue
             df = pd.DataFrame(
-                [{"name": fn.name, "file": self.path, "line": fn.lineno, "type": "function",
+                [{"name": fn.name, "file": self.path, "line": fn.lineno, "type": "method",
                   "comment": get_comment(fn)}])
             self.data = pd.concat([self.data, df])
 
