@@ -1,5 +1,8 @@
-from search_data import search
+from search_data import search, get_top_vectors
 import pandas as pd
+from sklearn.manifold import TSNE
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 
 def partition_every(n, source):
@@ -32,7 +35,26 @@ def compute_prec_recall(gt, results):
 
 def main():
     ground_truth = process_ground_truth()
-    [all_tfidf, all_lsi, all_doc2vec] = search(ground_truth["query"].to_list())
+    queries = ground_truth["query"].to_list()
+    [all_tfidf, all_lsi, all_doc2vec] = search(queries)
+    [embedded_vec_lsi, embedded_vec_doc2vec] = [
+        [TSNE(n_components=2, perplexity=2, n_iter=3000).fit_transform(x) for x in vectors]
+        for vectors in get_top_vectors(queries)
+    ]
+
+    df_vec_lsi = [[[*y, i] for y in x] for i,x in enumerate(embedded_vec_lsi)]
+    df_vec_lsi = [y for x in df_vec_lsi for y in x]
+    df_vec_lsi = pd.DataFrame(df_vec_lsi, columns=["x", "y", "idx"])
+    plt.figure()
+    sns.scatterplot(data=df_vec_lsi, x="x", y="y", hue='idx', palette=sns.color_palette("tab10"))
+    plt.show()
+
+    df_vec_doc2vec = [[[*y, i] for y in x] for i,x in enumerate(embedded_vec_doc2vec)]
+    df_vec_doc2vec = [y for x in df_vec_doc2vec for y in x]
+    df_vec_doc2vec = pd.DataFrame(df_vec_doc2vec, columns=["x", "y", "idx"])
+    plt.figure()
+    sns.scatterplot(data=df_vec_doc2vec, x="x", y="y", hue='idx', palette=sns.color_palette("tab10"))
+    plt.show()
 
     tfidf = compute_prec_recall(ground_truth, all_tfidf)
     print(f"{tfidf=}")

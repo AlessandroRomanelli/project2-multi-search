@@ -29,8 +29,7 @@ def read_corpus(lines: [str], tokens_only=False):
         else:
             yield doc2vec.TaggedDocument(tokens, [i])
 
-
-def search(queries: [str]):
+def analyze():
     # Read previous results
     data = pd.read_csv("results.csv", dtype={0: str, 1: str, 2: int, 3: str, 4: str}).fillna("")
 
@@ -59,9 +58,57 @@ def search(queries: [str]):
     dictionary = Dictionary([x.split() for x in data["processed_doc"].to_list()])
     data["corpus_bow"] = data["processed_doc"].apply(lambda x: dictionary.doc2bow(x.split()))
 
+    return data
+
+
+def get_top_vectors(queries: [str]):
+    data = analyze()
+    dictionary = Dictionary([x.split() for x in data["processed_doc"].to_list()])
+    tfidf = TfidfModel(data["corpus_bow"].to_list())
+
+    # Search by LSI
+    corpus_tfidf = tfidf[data["corpus_bow"].to_list()]
+    lsi = LsiModel(corpus_tfidf, id2word=dictionary, num_topics=300)
+    corpus_lsi = lsi[corpus_tfidf]
+    index = MatrixSimilarity(corpus_lsi)
+
+    lsi_results = []
+    for query in queries:
+        query_bow = dictionary.doc2bow(query.split())
+        vec_lsi = lsi[tfidf[query_bow]]
+        sims = abs(index[vec_lsi])
+        sims = sorted(enumerate(sims), key=lambda x: x[1], reverse=True)
+
+        lsi_data = []
+        for i, s in sims[:5]:
+            lsi_data.append([x[1] for x in corpus_lsi[i]])
+        lsi_results.append(lsi_data)
+
+    # Search by doc2vec
+    corpus_doc2vec = list(read_corpus(data["processed_doc"].to_list()))
+    corpus_doc2vec_untagged = list(read_corpus(data["processed_doc"].to_list(), tokens_only=True))
+    model = doc2vec.Doc2Vec(vector_size=300, min_count=2, epochs=40)
+    model.build_vocab(corpus_doc2vec)
+    model.train(corpus_doc2vec, total_examples=model.corpus_count, epochs=model.epochs)
+
+    doc2vec_results = []
+    for vector in list(read_corpus(queries, tokens_only=True)):
+        inferred_vec = model.infer_vector(vector)
+        sims = model.docvecs.most_similar([inferred_vec], topn=5)
+        doc2vec_data = []
+        for i, s in sims[:5]:
+            doc2vec_data.append(model.infer_vector(corpus_doc2vec_untagged[i]))
+        doc2vec_results.append(doc2vec_data)
+
+    return [lsi_results, doc2vec_results]
+
+def search(queries: [str]):
+    data = analyze()
+    dictionary = Dictionary([x.split() for x in data["processed_doc"].to_list()])
     # Search by TF-IDF
     tfidf = TfidfModel(data["corpus_bow"].to_list())
-    index = SparseMatrixSimilarity(tfidf[data["corpus_bow"].to_list()], num_features=len(dictionary))
+    corpus_tfidf = tfidf[data["corpus_bow"].to_list()]
+    index = SparseMatrixSimilarity(corpus_tfidf, num_features=len(dictionary))
 
     tfidf_results = []
     for query in queries:
