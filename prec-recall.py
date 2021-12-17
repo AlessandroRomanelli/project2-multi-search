@@ -4,6 +4,8 @@ from sklearn.manifold import TSNE
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+import warnings
+warnings.filterwarnings(action='ignore',category=FutureWarning)
 
 def partition_every(n, source):
     return [source[i::n] for i in range(n)]
@@ -26,17 +28,19 @@ def compute_prec_recall(gt, results):
         filtered = df[df["name"] == gt["class"]]
         if not len(filtered.index):
             continue
-        [position] = filtered.index + 1
+        [position] = filtered.index
+        position += 1
         stats["precision"] = stats["precision"] + (1 / position)
         stats["recall"] = stats["recall"] + 1
     stats["precision"] = stats["precision"] / len(gt.index)
     stats["recall"] = stats["recall"] / len(gt.index)
     return stats
 
+
 def main():
     ground_truth = process_ground_truth()
     queries = ground_truth["query"].to_list()
-    [all_tfidf, all_lsi, all_doc2vec] = search(queries)
+    [all_freq, all_tfidf, all_lsi, all_doc2vec] = search(queries)
     [embedded_vec_lsi, embedded_vec_doc2vec] = [
         [TSNE(n_components=2, perplexity=2, n_iter=3000).fit_transform(x) for x in vectors]
         for vectors in get_top_vectors(queries)
@@ -56,6 +60,8 @@ def main():
     sns.scatterplot(data=df_vec_doc2vec, x="x", y="y", hue='idx', palette=sns.color_palette("tab10"))
     plt.show()
 
+    freq = compute_prec_recall(ground_truth, all_freq)
+    print(f"{freq=}")
     tfidf = compute_prec_recall(ground_truth, all_tfidf)
     print(f"{tfidf=}")
     lsi = compute_prec_recall(ground_truth, all_lsi)

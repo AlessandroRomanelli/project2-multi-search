@@ -19,6 +19,7 @@ stopwords = ["main", "test", "tests", "i", "me", "my", "myself", "we", "our", "o
              "same", "so", "than", "too", "very", "s", "t", "can", "will", "just", "don", "should", "now"]
 
 pd.set_option('display.max_colwidth', None)
+pd.set_option('display.max_columns', None)
 
 
 def read_corpus(lines: [str], tokens_only=False):
@@ -50,10 +51,8 @@ def analyze():
     # Process the document by removing all terms that appear less than twice in the corpus
     data["processed_doc"] = data["document"].apply(lambda x: " ".join([y for y in x.split() if frequency[y] > 1]))
     data["processed_doc"] = data["processed_doc"].replace("", float("NaN"))
-
     # Drop all rows with empty document
     data = data.dropna(subset=["processed_doc"]).reset_index(drop=True)
-
     # Create bag of words
     dictionary = Dictionary([x.split() for x in data["processed_doc"].to_list()])
     data["corpus_bow"] = data["processed_doc"].apply(lambda x: dictionary.doc2bow(x.split()))
@@ -102,9 +101,25 @@ def get_top_vectors(queries: [str]):
 
     return [lsi_results, doc2vec_results]
 
+
 def search(queries: [str]):
     data = analyze()
     dictionary = Dictionary([x.split() for x in data["processed_doc"].to_list()])
+    # Search by freq
+    freq_results = []
+    index = SparseMatrixSimilarity(data["corpus_bow"].to_list(), num_features=len(dictionary))
+    for query in queries:
+        query_bow = dictionary.doc2bow(query.split())
+        sims = index[query_bow]
+        sims = sorted(enumerate(sims), key=lambda x: x[1], reverse=True)
+        freq_data = []
+        for i, s in sims[:5]:
+            row = data.loc[i][["name", "file", "type", "line"]]
+            row["similarity"] = s
+            freq_data.append(row)
+        freq_data = pd.concat(freq_data, axis=1).T.reset_index(drop=True)
+        freq_results.append(freq_data)
+
     # Search by TF-IDF
     tfidf = TfidfModel(data["corpus_bow"].to_list())
     corpus_tfidf = tfidf[data["corpus_bow"].to_list()]
@@ -162,20 +177,23 @@ def search(queries: [str]):
         doc2vec_data = pd.concat(doc2vec_data, axis=1).T.reset_index(drop=True)
         doc2vec_results.append(doc2vec_data)
 
-    return [tfidf_results, lsi_results, doc2vec_results]
+    return [freq_results, tfidf_results, lsi_results, doc2vec_results]
 
 
 def main():
-    [(top5_tfidf, top5_lsi, top5_doc2vec)] = list(zip(*search(["Optimizer that implements the Adadelta algorithm"])))
+    [(top5_freq, top5_tfidf, top5_lsi, top5_doc2vec)] = list(zip(*search(["Optimizer that implements the Adadelta algorithm"])))
+
+    print("Top 5 - Freq:")
+    print(top5_freq[["name", "file", "similarity"]].to_latex(index=False))
 
     print("Top 5 - TFIDF:")
-    print(top5_tfidf)
+    print(top5_tfidf[["name", "file", "similarity"]].to_latex(index=False))
 
     print("Top 5 - LSI:")
-    print(top5_lsi)
+    print(top5_lsi[["name", "file", "similarity"]].to_latex(index=False))
 
     print("Top 5 - Doc2Vec:")
-    print(top5_doc2vec)
+    print(top5_doc2vec[["name", "file", "similarity"]].to_latex(index=False))
 
 
 if __name__ == "__main__":
