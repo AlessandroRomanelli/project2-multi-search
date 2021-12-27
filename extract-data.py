@@ -1,8 +1,8 @@
 import os
 import sys
-from ast import parse, NodeVisitor, ClassDef, Assign, FunctionDef, get_docstring
+from ast import parse, ClassDef, FunctionDef, get_docstring, Constant, AsyncFunctionDef, Module
+
 import pandas as pd
-import re
 
 
 def check_if_py(filePath):
@@ -22,44 +22,47 @@ def main():
 
 
 def is_blacklist(node):
-    return node.name[0] == "_" or node.name == "main" or "test" in node.name.lower()
+    name = node.name.lower()
+    return name[0] == "_" or any([x in name for x in ["main", "test"]])
 
 
 def get_comment(node):
-    comment = get_docstring(node, clean=True)
-    if not comment:
-        return None
-    return re.sub("\W+", " ", get_docstring(node, clean=True))
+    try:
+        comment = get_docstring(node, clean=True)
+        if comment:
+            return comment.replace('\n', ' ')
+    except TypeError as e:
+        print(e)
+    comments = []
+    for x in [y for y in node.body if isinstance(y, Constant) and y.kind is None and len(str(y.value)) > 50]:
+        comments.append(str(x.value))
+    return " ".join(comments).replace('\n', ' ')
 
 
-class Visitor(NodeVisitor):
-    def __init__(self, path):
-        self.path = path
-        self.data = pd.DataFrame(columns=["name", "file", "line", "type", "comment"])
-
-    def visit_ClassDef(self, node: ClassDef):
-        if is_blacklist(node):
-            return
-        df = pd.DataFrame([{"name": node.name, "file": self.path, "line": node.lineno, "type": "class",
+def get_classes(node: Module, path: str):
+    data = pd.DataFrame()
+    for classNode in [x for x in node.body if isinstance(x, ClassDef) and not is_blacklist(x)]:
+        df = pd.DataFrame([{"name": classNode.name, "file": path, "line": classNode.lineno, "type": "class",
                             "comment": get_comment(node)}])
-        self.data = pd.concat([self.data, df])
+        data = pd.concat([data, df])
 
-        for fn in [x for x in node.body if type(x) is FunctionDef]:
-            if is_blacklist(fn):
-                continue
+        for fn in [x for x in classNode.body if isinstance(x, (FunctionDef, AsyncFunctionDef)) and not is_blacklist(x)]:
             df = pd.DataFrame(
-                [{"name": fn.name, "file": self.path, "line": fn.lineno, "type": "method",
+                [{"name": fn.name, "file": path, "line": fn.lineno, "type": "method",
                   "comment": get_comment(fn)}])
-            self.data = pd.concat([self.data, df])
+            data = pd.concat([data, df])
+    return data
 
-    def visit_FunctionDef(self, node: FunctionDef):
-        if is_blacklist(node):
-            return
+
+def get_functions(node: Module, path: str):
+    data = pd.DataFrame()
+    for functionNode in [x for x in node.body if
+                         isinstance(x, (FunctionDef, AsyncFunctionDef)) and not is_blacklist(x)]:
         df = pd.DataFrame(
-            [{"name": node.name, "file": self.path, "line": node.lineno, "type": "function",
-              "comment": get_comment(node)}])
-        self.data = pd.concat([self.data, df])
-        pass
+            [{"name": functionNode.name, "file": path, "line": functionNode.lineno, "type": "function",
+              "comment": get_comment(functionNode)}])
+        data = pd.concat([data, df])
+    return data
 
 
 def process_input():
@@ -74,10 +77,14 @@ def process_input():
 def process_file(path: str) -> pd.DataFrame:
     with open(path, "r") as f:
         tree = parse(f.read())
-    visitor = Visitor(path)
-    visitor.visit(tree)
-    return visitor.data.reset_index(drop=True)
+    return pd.concat([get_classes(tree, path), get_functions(tree, path)]).reset_index(drop=True).drop_duplicates(
+        subset=["name", "comment"])
 
 
 if __name__ == "__main__":
     main()
+    res = pd.read_csv("./results.csv")
+    print(len(res["file"].unique()))
+    print(len(res[res["type"] == "method"]))
+    print(len(res[res["type"] == "function"]))
+    print(len(res[res["type"] == "class"]))

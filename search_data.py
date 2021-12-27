@@ -1,200 +1,174 @@
-import sys
-import pandas as pd
-from gensim.utils import simple_preprocess
-from gensim.corpora import Dictionary
-from gensim.models import TfidfModel, LsiModel, doc2vec
-from gensim.similarities import SparseMatrixSimilarity, MatrixSimilarity
 import re
 from collections import defaultdict
 
-stopwords = ["main", "test", "tests", "i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your",
-             "yours", "yourself", "yourselves", "he", "him", "his", "himself", "she", "her", "hers", "herself", "it",
-             "its", "itself", "they", "them", "their", "theirs", "themselves", "what", "which", "who", "whom", "this",
-             "that", "these", "those", "am", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
-             "having", "do", "does", "did", "doing", "a", "an", "the", "and", "but", "if", "or", "because", "as",
-             "until", "while", "of", "at", "by", "for", "with", "about", "against", "between", "into", "through",
-             "during", "before", "after", "above", "below", "to", "from", "up", "down", "in", "out", "on", "off",
-             "over", "under", "again", "further", "then", "once", "here", "there", "when", "where", "why", "how", "all",
-             "any", "both", "each", "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own",
-             "same", "so", "than", "too", "very", "s", "t", "can", "will", "just", "don", "should", "now"]
+import pandas as pd
+from gensim.corpora import Dictionary
+from gensim.models import TfidfModel, LsiModel
+from gensim.models.doc2vec import TaggedDocument, Doc2Vec
+from gensim.parsing.preprocessing import preprocess_string, lower_to_unicode, remove_stopwords, strip_punctuation, \
+    strip_numeric, strip_non_alphanum, split_alphanum, stem_text, strip_short, strip_multiple_whitespaces, strip_tags
+from gensim.similarities import SparseMatrixSimilarity
+from gensim.utils import simple_preprocess
 
 pd.set_option('display.max_colwidth', None)
 pd.set_option('display.max_columns', None)
 
+def split_words(s: str):
+    return " ".join([" ".join(split_camelcase(x)) if is_camelcase(x) else x for x in s.split()])
 
-def read_corpus(lines: [str], tokens_only=False):
-    for i, line in enumerate(lines):
-        tokens = simple_preprocess(line)
-        if tokens_only:
-            yield tokens
-        else:
-            yield doc2vec.TaggedDocument(tokens, [i])
 
-def analyze():
-    # Read previous results
-    data = pd.read_csv("results.csv", dtype={0: str, 1: str, 2: int, 3: str, 4: str}).fillna("")
+def split_camelcase(s: str):
+    return re.findall(r'[A-Z](?:[a-z]+|[A-Z]*(?=[A-Z]|$))', s)
 
-    # Create a document from the union of method name and method comment
-    data["document"] = data["name"] + " " + data["comment"]
-    # Remove all stopwords from each document
-    data["document"] = data["document"].apply(lambda x: " ".join(
-        [x for x in re.split("\W|_+", x.strip().lower()) if x not in stopwords]
-    ))
 
-    # Count the frequencies of terms in the corpus
+def is_camelcase(s: str):
+    return len(split_camelcase(s)) > 0
+
+
+def preprocess_queries(s: str):
+    return " ".join(preprocess_string(split_words(s), filters=[
+        lower_to_unicode,
+        split_alphanum,
+        strip_short,
+        strip_numeric
+    ]))
+
+
+def preprocess_document(s: str):
+    return " ".join(preprocess_string(split_words(s), filters=[
+        lower_to_unicode,
+        split_alphanum,
+        strip_short,
+        strip_numeric
+    ]))
+
+
+def preprocess_document_train(s: str):
+    return " ".join(preprocess_string(split_words(s), filters=[
+        lower_to_unicode,
+        split_alphanum,
+        strip_tags,
+        strip_punctuation,
+        strip_multiple_whitespaces,
+        remove_stopwords,
+        strip_short,
+        strip_non_alphanum,
+        stem_text
+    ]))
+
+
+def read_results():
+    return pd.read_csv("./results.csv").fillna("")
+
+
+def get_documents(training=False):
+    df = read_results()
+    preprocess_fn = preprocess_document if not training else preprocess_document_train
+    documents = [preprocess_fn(doc) for doc in (df["name"] + " " + df["comment"]).to_list()]
     frequency = defaultdict(int)
-    for (i, document) in data["document"].iteritems():
-        words = [x.strip() for x in document.split(" ") if len(x)]
-        for word in words:
+    for doc in documents:
+        for word in doc.split():
             frequency[word] += 1
 
-    # Process the document by removing all terms that appear less than twice in the corpus
-    data["processed_doc"] = data["document"].apply(lambda x: " ".join([y for y in x.split() if frequency[y] > 1]))
-    data["processed_doc"] = data["processed_doc"].replace("", float("NaN"))
-    # Drop all rows with empty document
-    data = data.dropna(subset=["processed_doc"]).reset_index(drop=True)
-    # Create bag of words
-    dictionary = Dictionary([x.split() for x in data["processed_doc"].to_list()])
-    data["corpus_bow"] = data["processed_doc"].apply(lambda x: dictionary.doc2bow(x.split()))
-
-    return data
-
-
-def get_top_vectors(queries: [str]):
-    data = analyze()
-    dictionary = Dictionary([x.split() for x in data["processed_doc"].to_list()])
-    tfidf = TfidfModel(data["corpus_bow"].to_list())
-
-    # Search by LSI
-    corpus_tfidf = tfidf[data["corpus_bow"].to_list()]
-    lsi = LsiModel(corpus_tfidf, id2word=dictionary, num_topics=300)
-    corpus_lsi = lsi[corpus_tfidf]
-    index = MatrixSimilarity(corpus_lsi)
-
-    lsi_results = []
-    for query in queries:
-        query_bow = dictionary.doc2bow(query.split())
-        vec_lsi = lsi[tfidf[query_bow]]
-        sims = abs(index[vec_lsi])
-        sims = sorted(enumerate(sims), key=lambda x: x[1], reverse=True)
-
-        lsi_data = []
-        for i, s in sims[:5]:
-            lsi_data.append([x[1] for x in corpus_lsi[i]])
-        lsi_results.append(lsi_data)
-
-    # Search by doc2vec
-    corpus_doc2vec = list(read_corpus(data["processed_doc"].to_list()))
-    corpus_doc2vec_untagged = list(read_corpus(data["processed_doc"].to_list(), tokens_only=True))
-    model = doc2vec.Doc2Vec(vector_size=300, min_count=2, epochs=40)
-    model.build_vocab(corpus_doc2vec)
-    model.train(corpus_doc2vec, total_examples=model.corpus_count, epochs=model.epochs)
-
-    doc2vec_results = []
-    for vector in list(read_corpus(queries, tokens_only=True)):
-        inferred_vec = model.infer_vector(vector)
-        sims = model.docvecs.most_similar([inferred_vec], topn=5)
-        doc2vec_data = []
-        for i, s in sims[:5]:
-            doc2vec_data.append(model.infer_vector(corpus_doc2vec_untagged[i]))
-        doc2vec_results.append(doc2vec_data)
-
-    return [lsi_results, doc2vec_results]
+    documents = [
+        " ".join([word for word in doc.split() if frequency[word] > 1 and word not in ["main", "test"]]) for
+        doc in documents]
+    return [x for x in enumerate(documents) if len(x[1])]
 
 
 def search(queries: [str]):
-    data = analyze()
-    dictionary = Dictionary([x.split() for x in data["processed_doc"].to_list()])
-    # Search by freq
-    freq_results = []
-    index = SparseMatrixSimilarity(data["corpus_bow"].to_list(), num_features=len(dictionary))
-    for query in queries:
+    queries = [preprocess_queries(x) for x in queries]
+    results = read_results()
+    documents = get_documents()
+    documents_train = get_documents(True)
+    dictionary = Dictionary([doc.split() for i, doc in documents])
+    dictionary_train = Dictionary([doc.split() for i, doc in documents_train])
+    corpus = [dictionary.doc2bow(doc.split()) for i, doc in documents]
+    corpus_train = [dictionary_train.doc2bow(doc.split()) for i, doc in documents_train]
+
+    def get_top5(sims, docs):
+        top5 = []
+        for i, similarity in sorted(enumerate(sims), key=lambda x: x[1], reverse=True)[:5]:
+            idx, doc = docs[i]
+            result = results.iloc[idx].copy()
+            result["similarity"] = similarity
+            top5.append(result)
+        return pd.DataFrame(top5).reset_index(drop=True)
+
+    index = SparseMatrixSimilarity(corpus, num_features=len(dictionary))
+
+    def search_by_freq(query: str):
         query_bow = dictionary.doc2bow(query.split())
-        sims = index[query_bow]
-        sims = sorted(enumerate(sims), key=lambda x: x[1], reverse=True)
-        freq_data = []
-        for i, s in sims[:5]:
-            row = data.loc[i][["name", "file", "type", "line"]]
-            row["similarity"] = s
-            freq_data.append(row)
-        freq_data = pd.concat(freq_data, axis=1).T.reset_index(drop=True)
-        freq_results.append(freq_data)
+        return get_top5(index[query_bow], documents)
 
-    # Search by TF-IDF
-    tfidf = TfidfModel(data["corpus_bow"].to_list())
-    corpus_tfidf = tfidf[data["corpus_bow"].to_list()]
-    index = SparseMatrixSimilarity(corpus_tfidf, num_features=len(dictionary))
+    tfidf = TfidfModel(corpus, normalize=True)
+    tfidf_index = SparseMatrixSimilarity(tfidf[corpus], num_features=len(dictionary))
 
-    tfidf_results = []
-    for query in queries:
+    def search_by_tfidf(query: str):
         query_bow = dictionary.doc2bow(query.split())
-        sims = index[tfidf[query_bow]]
-        sims = sorted(enumerate(sims), key=lambda x: x[1], reverse=True)
-        tfidf_data = []
-        for i, s in sims[:5]:
-            row = data.loc[i][["name", "file", "type", "line"]]
-            row["similarity"] = s
-            tfidf_data.append(row)
-        tfidf_data = pd.concat(tfidf_data, axis=1).T.reset_index(drop=True)
-        tfidf_results.append(tfidf_data)
+        return get_top5(tfidf_index[query_bow], documents)
 
-    # Search by LSI
-    corpus_tfidf = tfidf[data["corpus_bow"].to_list()]
-    lsi = LsiModel(corpus_tfidf, id2word=dictionary, num_topics=300)
-    corpus_lsi = lsi[corpus_tfidf]
-    index = MatrixSimilarity(corpus_lsi)
+    lsi_tfidf = TfidfModel(corpus_train, normalize=True)
+    lsi_tfidf_corpus = lsi_tfidf[corpus_train]
+    lsi = LsiModel(lsi_tfidf_corpus, id2word=dictionary_train, num_topics=300)
+    lsi_corpus = lsi[lsi_tfidf_corpus]
+    lsi_index = SparseMatrixSimilarity(lsi_corpus, num_features=len(dictionary_train))
 
-    lsi_results = []
-    for query in queries:
-        query_bow = dictionary.doc2bow(query.split())
-        vec_lsi = lsi[tfidf[query_bow]]
-        sims = abs(index[vec_lsi])
-        sims = sorted(enumerate(sims), key=lambda x: x[1], reverse=True)
+    def search_by_lsi(query: str):
+        query = preprocess_document_train(query)
+        vec_bow = dictionary_train.doc2bow(query.split())
+        vec_lsi = lsi[vec_bow]
+        return get_top5(lsi_index[vec_lsi], documents_train)
 
-        lsi_data = []
-        for i, s in sims[:5]:
-            row = data.loc[i][["name", "file", "type", "line"]]
-            row["similarity"] = s
-            lsi_data.append(row)
-        lsi_data = pd.concat(lsi_data, axis=1).T.reset_index(drop=True)
-        lsi_results.append(lsi_data)
+    def vector_by_lsi(query: str):
+        top5_vec = []
+        # query = preprocess_document_train(query)
+        vec_bow = dictionary_train.doc2bow(query.split())
+        vec_lsi = lsi[vec_bow]
+        sims = lsi_index[vec_lsi]
+        for i, similarity in sorted(enumerate(sims), key=lambda x: x[1], reverse=True)[:5]:
+            top5_vec.append([x[1] for x in lsi_corpus[i]])
+        return top5_vec
 
-    # Search by doc2vec
-    corpus_doc2vec = list(read_corpus(data["processed_doc"].to_list()))
-    model = doc2vec.Doc2Vec(vector_size=300, min_count=2, epochs=40)
-    model.build_vocab(corpus_doc2vec)
-    model.train(corpus_doc2vec, total_examples=model.corpus_count, epochs=model.epochs)
+    train_corpus = [TaggedDocument(doc.split(), [i]) for i, doc in documents_train]
+    doc2vec = Doc2Vec(train_corpus, vector_size=300, dm=0, window=10, min_count=2, epochs=60, seed=420)
 
-    doc2vec_results = []
-    for vector in list(read_corpus(queries, tokens_only=True)):
-        inferred_vec = model.infer_vector(vector)
-        sims = model.docvecs.most_similar([inferred_vec], topn=5)
-        doc2vec_data = []
-        for i, s in sims[:5]:
-            row = data.loc[i][["name", "file", "type", "line"]]
-            row["similarity"] = s
-            doc2vec_data.append(row)
-        doc2vec_data = pd.concat(doc2vec_data, axis=1).T.reset_index(drop=True)
-        doc2vec_results.append(doc2vec_data)
+    def search_by_doc2vec(query: str):
+        query = preprocess_document_train(query)
+        vec = doc2vec.infer_vector(query.split())
+        sims = doc2vec.dv.most_similar([vec], topn=5)
+        top5 = []
+        for i, similarity in sims:
+            result = results.iloc[i].copy()
+            result["similarity"] = similarity
+            top5.append(result)
+        return pd.DataFrame(top5).reset_index(drop=True)
 
-    return [freq_results, tfidf_results, lsi_results, doc2vec_results]
+    def vector_by_doc2vec(query: str):
+        top5_vec = []
+        query = preprocess_document_train(query)
+        vec = doc2vec.infer_vector(query.split())
+        sims = doc2vec.dv.most_similar([vec], topn=5)
+        for i, s in sims:
+            top5_vec.append(doc2vec.dv[i])
+        return top5_vec
 
+    [freq_top5, tfidf_top5, lsi_top5, doc2vec_top5, lsi_top5_vecs, doc2vec_top5_vecs] = list(zip(*[
+        [
+            search_by_freq(query),
+            search_by_tfidf(query),
+            search_by_lsi(query),
+            search_by_doc2vec(query),
+            vector_by_lsi(query),
+            vector_by_doc2vec(query)
+        ] for query in queries]))
 
-def main():
-    [(top5_freq, top5_tfidf, top5_lsi, top5_doc2vec)] = list(zip(*search(["Optimizer that implements the Adadelta algorithm"])))
-
-    print("Top 5 - Freq:")
-    print(top5_freq[["name", "file", "similarity"]].to_latex(index=False))
-
-    print("Top 5 - TFIDF:")
-    print(top5_tfidf[["name", "file", "similarity"]].to_latex(index=False))
-
-    print("Top 5 - LSI:")
-    print(top5_lsi[["name", "file", "similarity"]].to_latex(index=False))
-
-    print("Top 5 - Doc2Vec:")
-    print(top5_doc2vec[["name", "file", "similarity"]].to_latex(index=False))
+    return [freq_top5, tfidf_top5, lsi_top5, doc2vec_top5, lsi_top5_vecs, doc2vec_top5_vecs]
 
 
 if __name__ == "__main__":
-    main()
+    [[d1], [d2], [d3], [d4], [v5], [v6]] = search(["Optimizer that implements the Adadelta algorithm"])
+    print(d1[["name", "file", "similarity"]].to_latex())
+    print(d2[["name", "file", "similarity"]].to_latex())
+    print(d3[["name", "file", "similarity"]].to_latex())
+    print(d4[["name", "file", "similarity"]].to_latex())

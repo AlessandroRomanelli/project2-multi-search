@@ -1,11 +1,13 @@
-from search_data import search, get_top_vectors
+from search_data import search
 import pandas as pd
 from sklearn.manifold import TSNE
 import seaborn as sns
 import matplotlib.pyplot as plt
 
 import warnings
-warnings.filterwarnings(action='ignore',category=FutureWarning)
+
+warnings.filterwarnings(action='ignore', category=FutureWarning)
+
 
 def partition_every(n, source):
     return [source[i::n] for i in range(n)]
@@ -19,55 +21,52 @@ def process_ground_truth():
 
 
 def compute_prec_recall(gt, results):
-    stats = {
-        "precision": 0,
-        "recall": 0
-    }
-    for (i,gt) in gt.iterrows():
+    precision = recall = 0
+    for (i, ground_truth) in gt.iterrows():
         df = results[i]
-        filtered = df[df["name"] == gt["class"]]
+        filtered = df[(df["name"] == ground_truth["class"]) & (df["file"] == ground_truth["path"])]
         if not len(filtered.index):
             continue
         [position] = filtered.index
-        position += 1
-        stats["precision"] = stats["precision"] + (1 / position)
-        stats["recall"] = stats["recall"] + 1
-    stats["precision"] = stats["precision"] / len(gt.index)
-    stats["recall"] = stats["recall"] / len(gt.index)
-    return stats
+        precision += 1 / (position + 1)
+        recall += 1
+    precision /= len(gt.index)
+    recall /= len(gt.index)
+    return precision, recall
 
 
 def main():
     ground_truth = process_ground_truth()
     queries = ground_truth["query"].to_list()
-    [all_freq, all_tfidf, all_lsi, all_doc2vec] = search(queries)
+    [all_freq, all_tfidf, all_lsi, all_doc2vec, all_lsi_vec, all_doc2vec_vec] = search(queries)
+    tsne = TSNE(n_components=2, perplexity=50, init='pca', n_iter=5000, random_state=420)
     [embedded_vec_lsi, embedded_vec_doc2vec] = [
-        [TSNE(n_components=2, perplexity=2, n_iter=3000).fit_transform(x) for x in vectors]
-        for vectors in get_top_vectors(queries)
+        [tsne.fit_transform(vector) for vector in vectors]
+        for vectors in [all_lsi_vec, all_doc2vec_vec]
     ]
 
-    df_vec_lsi = [[[*y, i] for y in x] for i,x in enumerate(embedded_vec_lsi)]
+    df_vec_lsi = [[[*y, i] for y in x] for i, x in enumerate(embedded_vec_lsi)]
     df_vec_lsi = [y for x in df_vec_lsi for y in x]
     df_vec_lsi = pd.DataFrame(df_vec_lsi, columns=["x", "y", "idx"])
     plt.figure()
     sns.scatterplot(data=df_vec_lsi, x="x", y="y", hue='idx', palette=sns.color_palette("tab10"))
     plt.show()
 
-    df_vec_doc2vec = [[[*y, i] for y in x] for i,x in enumerate(embedded_vec_doc2vec)]
+    df_vec_doc2vec = [[[*y, i] for y in x] for i, x in enumerate(embedded_vec_doc2vec)]
     df_vec_doc2vec = [y for x in df_vec_doc2vec for y in x]
     df_vec_doc2vec = pd.DataFrame(df_vec_doc2vec, columns=["x", "y", "idx"])
     plt.figure()
     sns.scatterplot(data=df_vec_doc2vec, x="x", y="y", hue='idx', palette=sns.color_palette("tab10"))
     plt.show()
 
-    freq = compute_prec_recall(ground_truth, all_freq)
-    print(f"{freq=}")
-    tfidf = compute_prec_recall(ground_truth, all_tfidf)
-    print(f"{tfidf=}")
-    lsi = compute_prec_recall(ground_truth, all_lsi)
-    print(f"{lsi=}")
-    doc2vec = compute_prec_recall(ground_truth, all_doc2vec)
-    print(f"{doc2vec=}")
+    freq_prec, freq_recall = compute_prec_recall(ground_truth, all_freq)
+    print(f"{freq_prec=}, {freq_recall=}")
+    tfidf_prec, tfidf_recall = compute_prec_recall(ground_truth, all_tfidf)
+    print(f"{tfidf_prec=}, {tfidf_recall=}")
+    lsi_prec, lsi_recall = compute_prec_recall(ground_truth, all_lsi)
+    print(f"{lsi_prec=}, {lsi_recall=}")
+    doc2vec_prec, doc2vec_recall = compute_prec_recall(ground_truth, all_doc2vec)
+    print(f"{doc2vec_prec=}, {doc2vec_recall=}")
 
 
 if __name__ == "__main__":
